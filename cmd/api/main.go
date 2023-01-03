@@ -4,9 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"flag"
-	"fmt"
-	"log"
-	"net/http"
 	"os"
 	"time"
 
@@ -15,6 +12,7 @@ import (
 	// compiler complaining that the package isn't being used.
 	_ "github.com/lib/pq"
 	"github.com/maan19/greenlight/internal/data"
+	"github.com/maan19/greenlight/internal/jsonlog"
 )
 
 // Declare a string containing the application version number. Later in the book we'll
@@ -33,6 +31,14 @@ type config struct {
 		maxIdleConns int
 		maxIdleTime  string
 	}
+	// Add a new limiter struct containing fields for the requests-per-second and burst
+	// values, and a boolean field which we can use to enable/disable rate limiting
+	// altogether.
+	limiter struct {
+		rps     float64
+		burst   int
+		enabled bool
+	}
 }
 
 // Define an application struct to hold the dependencies for our HTTP handlers, helpers,
@@ -40,7 +46,7 @@ type config struct {
 // logger, but it will grow to include a lot more as our build progresses.
 type application struct {
 	config config
-	logger *log.Logger
+	logger *jsonlog.Logger
 	models data.Models
 }
 
@@ -54,38 +60,36 @@ func main() {
 	flag.IntVar(&cfg.db.maxOpenConns, "db-max-open-conns", 25, "PostgreSQL max open connections")
 	flag.IntVar(&cfg.db.maxIdleConns, "db-max-idle-conns", 25, "PostgreSQL max idle connections")
 	flag.StringVar(&cfg.db.maxIdleTime, "db-max-idle-time", "15m", "PostgreSQL max connection idle time")
+
+	// Create command line flags to read the setting values into the config struct.
+	// Notice that we use true as the default for the 'enabled' setting?
+	flag.Float64Var(&cfg.limiter.rps, "limiter-rps", 2, "Rate limiter maximum requests per second")
+	flag.IntVar(&cfg.limiter.burst, "limiter-burst", 4, "Rate limiter maximum burst")
+	flag.BoolVar(&cfg.limiter.enabled, "limiter-enabled", true, "Enable rate limiter")
 	flag.Parse()
-	logger := log.New(os.Stdout, "", log.Ldate|log.Ltime)
-	// Call the openDB() helper function (see below) to create the connection pool,
-	// passing in the config struct. If this returns an error, we log it and exit the
-	// application immediately.
+	// Initialize a new jsonlog.Logger which writes any messages *at or above* the INFO
+	// severity level to the standard out stream.
+	logger := jsonlog.New(os.Stdout, jsonlog.LevelInfo)
 	db, err := openDB(cfg)
 	if err != nil {
-		logger.Fatal(err)
+		// Use the PrintFatal() method to write a log entry containing the error at the
+		// FATAL level and exit. We have no additional properties to include in the log
+		// entry, so we pass nil as the second parameter.
+		logger.PrintFatal(err, nil)
 	}
-	// Defer a call to db.Close() so that the connection pool is closed before the
-	// main() function exits.
 	defer db.Close()
-	// Also log a message to say that the connection pool has been successfully
-	// established.
-	logger.Printf("database connection pool established")
+	// Likewise use the PrintInfo() method to write a message at the INFO level.
+	logger.PrintInfo("database connection pool established", nil)
 	app := &application{
 		config: cfg,
 		logger: logger,
 		models: data.NewModels(db),
 	}
-	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.port),
-		Handler:      app.routes(),
-		IdleTimeout:  time.Minute,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+	// Call app.serve() to start the server.
+	err = app.serve()
+	if err != nil {
+		logger.PrintFatal(err, nil)
 	}
-	logger.Printf("starting %s server on %s", cfg.env, srv.Addr)
-	// Because the err variable is now already declared in the code above, we need
-	// to use the = operator here, instead of the := operator.
-	err = srv.ListenAndServe()
-	logger.Fatal(err)
 }
 
 // The openDB() function returns a sql.DB connection pool.
