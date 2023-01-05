@@ -60,40 +60,13 @@ func (app *application) createMovieHandler(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-func (app *application) showMovieHandler(w http.ResponseWriter, r *http.Request) {
-	id, err := app.readIDParam(r)
-	if err != nil {
-		app.notFoundResponse(w, r)
-		return
-	}
-	// Call the Get() method to fetch the data for a specific movie. We also need to
-	// use the errors.Is() function to check if it returns a data.ErrRecordNotFound
-	// error, in which case we send a 404 Not Found response to the client.
-	movie, err := app.models.Movies.Get(id)
-	if err != nil {
-		switch {
-		case errors.Is(err, data.ErrRecordNotFound):
-			app.notFoundResponse(w, r)
-		default:
-			app.serverErrorResponse(w, r, err)
-		}
-		return
-	}
-	err = app.writeJSON(w, http.StatusOK, envelope{"movie": movie}, nil)
-	if err != nil {
-		app.serverErrorResponse(w, r, err)
-	}
-}
-
 func (app *application) updateMovieHandler(w http.ResponseWriter, r *http.Request) {
-	// Extract the movie ID from the URL.
 	id, err := app.readIDParam(r)
 	if err != nil {
 		app.notFoundResponse(w, r)
 		return
 	}
-	// Fetch the existing movie record from the database, sending a 404 Not Found
-	// response to the client if we couldn't find a matching record.
+	// Retrieve the movie record as normal.
 	movie, err := app.models.Movies.Get(id)
 	if err != nil {
 		switch {
@@ -104,39 +77,55 @@ func (app *application) updateMovieHandler(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	// Declare an input struct to hold the expected data from the client.
+	// Use pointers for the Title, Year and Runtime fields.
 	var input struct {
-		Title   string       `json:"title"`
-		Year    int32        `json:"year"`
-		Runtime data.Runtime `json:"runtime"`
-		Genres  []string     `json:"genres"`
+		Title   *string       `json:"title"`
+		Year    *int32        `json:"year"`
+		Runtime *data.Runtime `json:"runtime"`
+		Genres  []string      `json:"genres"`
 	}
-	// Read the JSON request body data into the input struct.
+	// Decode the JSON as normal.
 	err = app.readJSON(w, r, &input)
 	if err != nil {
 		app.badRequestResponse(w, r, err)
 		return
 	}
-	// Copy the values from the request body to the appropriate fields of the movie
-	// record.
-	movie.Title = input.Title
-	movie.Year = input.Year
-	movie.Runtime = input.Runtime
-	movie.Genres = input.Genres
-	// Validate the updated movie record, sending the client a 422 Unprocessable Entity
-	// response if any checks fail.
+	// If the input.Title value is nil then we know that no corresponding "title" key/
+	// value pair was provided in the JSON request body. So we move on and leave the
+	// movie record unchanged. Otherwise, we update the movie record with the new title
+	// value. Importantly, because input.Title is a now a pointer to a string, we need
+	// to dereference the pointer using the * operator to get the underlying value
+	// before assigning it to our movie record.
+	if input.Title != nil {
+		movie.Title = *input.Title
+	}
+	// We also do the same for the other fields in the input struct.
+	if input.Year != nil {
+		movie.Year = *input.Year
+	}
+	if input.Runtime != nil {
+		movie.Runtime = *input.Runtime
+	}
+	if input.Genres != nil {
+		movie.Genres = input.Genres // Note that we don't need to dereference a slice.
+	}
 	v := validator.New()
 	if data.ValidateMovie(v, movie); !v.Valid() {
 		app.failedValidationResponse(w, r, v.Errors)
 		return
 	}
-	// Pass the updated movie record to our new Update() method.
+	// Intercept any ErrEditConflict error and call the new editConflictResponse()
+	// helper.
 	err = app.models.Movies.Update(movie)
 	if err != nil {
-		app.serverErrorResponse(w, r, err)
+		switch {
+		case errors.Is(err, data.ErrEditConflict):
+			app.editConflictResponse(w, r)
+		default:
+			app.serverErrorResponse(w, r, err)
+		}
 		return
 	}
-	// Write the updated movie record in a JSON response.
 	err = app.writeJSON(w, http.StatusOK, envelope{"movie": movie}, nil)
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
@@ -164,6 +153,31 @@ func (app *application) deleteMovieHandler(w http.ResponseWriter, r *http.Reques
 	}
 	// Return a 200 OK status code along with a success message.
 	err = app.writeJSON(w, http.StatusOK, envelope{"message": "movie successfully deleted"}, nil)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
+}
+
+func (app *application) showMovieHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := app.readIDParam(r)
+	if err != nil {
+		app.notFoundResponse(w, r)
+		return
+	}
+	// Call the Get() method to fetch the data for a specific movie. We also need to
+	// use the errors.Is() function to check if it returns a data.ErrRecordNotFound
+	// error, in which case we send a 404 Not Found response to the client.
+	movie, err := app.models.Movies.Get(id)
+	if err != nil {
+		switch {
+		case errors.Is(err, data.ErrRecordNotFound):
+			app.notFoundResponse(w, r)
+		default:
+			app.serverErrorResponse(w, r, err)
+		}
+		return
+	}
+	err = app.writeJSON(w, http.StatusOK, envelope{"movie": movie}, nil)
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 	}
