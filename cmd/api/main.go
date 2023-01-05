@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +49,9 @@ type config struct {
 		password string
 		sender   string
 	}
+	cors struct {
+		trustedOrigins []string
+	}
 }
 
 // Include a sync.WaitGroup in the application struct. The zero-value for a
@@ -67,7 +71,6 @@ func main() {
 	flag.StringVar(&cfg.env, "env", "development", "Environment (development|staging|production)")
 	flag.StringVar(&cfg.db.dsn, "db-dsn", os.Getenv("GREENLIGHT_DB_DSN"), "PostgreSQL DSN")
 	// Read the connection pool settings from command-line flags into the config struct.
-	// Notice the default values that we're using?
 	flag.IntVar(&cfg.db.maxOpenConns, "db-max-open-conns", 25, "PostgreSQL max open connections")
 	flag.IntVar(&cfg.db.maxIdleConns, "db-max-idle-conns", 25, "PostgreSQL max idle connections")
 	flag.StringVar(&cfg.db.maxIdleTime, "db-max-idle-time", "15m", "PostgreSQL max connection idle time")
@@ -78,23 +81,22 @@ func main() {
 	flag.IntVar(&cfg.limiter.burst, "limiter-burst", 4, "Rate limiter maximum burst")
 	flag.BoolVar(&cfg.limiter.enabled, "limiter-enabled", true, "Enable rate limiter")
 	// Read the SMTP server configuration settings into the config struct, using the
-	// Mailtrap settings as the default values. IMPORTANT: If you're following along,
-	// make sure to replace the default values for smtp-username and smtp-password
-	// with your own Mailtrap credentials.
+	// Mailtrap settings as the default values.
 	flag.StringVar(&cfg.smtp.host, "smtp-host", "smtp.mailtrap.io", "SMTP host")
 	flag.IntVar(&cfg.smtp.port, "smtp-port", 2525, "SMTP port")
 	flag.StringVar(&cfg.smtp.username, "smtp-username", "a6188a501f8790", "SMTP username")
 	flag.StringVar(&cfg.smtp.password, "smtp-password", "67309690c25530", "SMTP password")
 	flag.StringVar(&cfg.smtp.sender, "smtp-sender", "Greenlight <maanj872@gmail.com>", "SMTP sender")
+	flag.Func("cors-trusted-origins", "Trusted CORS origins (space separated)", func(val string) error {
+		cfg.cors.trustedOrigins = strings.Fields(val)
+		return nil
+	})
 	flag.Parse()
 	// Initialize a new jsonlog.Logger which writes any messages *at or above* the INFO
 	// severity level to the standard out stream.
 	logger := jsonlog.New(os.Stdout, jsonlog.LevelInfo)
 	db, err := openDB(cfg)
 	if err != nil {
-		// Use the PrintFatal() method to write a log entry containing the error at the
-		// FATAL level and exit. We have no additional properties to include in the log
-		// entry, so we pass nil as the second parameter.
 		logger.PrintFatal(err, nil)
 	}
 	defer db.Close()
